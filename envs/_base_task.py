@@ -60,6 +60,14 @@ class Base_Task(gym.Env):
         # random.seed(kwags.get('seed', 0))
 
         self.FRAME_IDX = 0
+        # Absolute control step within the episode. take_dense_action() is called once
+        # per motion segment, but the M4 curve's window is a trailing window of the
+        # whole episode, so the index it is evaluated at has to survive across calls.
+        self.episode_control_step = 0
+        # Set by the M4/M5 driver to a DualArmCurve; None means replay unperturbed.
+        self.exploration_curve = kwags.get("exploration_curve", None)
+        # Set by the M4/M5 driver to a ContactTracker; stepped once per control step.
+        self._curve_tracker = None
         self.task_name = kwags.get("task_name")
         self.save_dir = kwags.get("save_path", "data")
         self.ep_num = kwags.get("now_ep_num", 0)
@@ -1514,9 +1522,18 @@ class Base_Task(gym.Env):
 
         for control_idx in range(max_control_len):
 
+            left_offset, right_offset = None, None
+            if self.exploration_curve is not None:
+                left_offset, right_offset = self.exploration_curve.offset(
+                    self.episode_control_step
+                )
+
             if (left_arm is not None and control_idx < left_arm["position"].shape[0]):  # control left arm
+                left_position = left_arm["position"][control_idx]
+                if left_offset is not None:
+                    left_position = left_position + left_offset[: len(left_position)]
                 self.robot.set_arm_joints(
-                    left_arm["position"][control_idx],
+                    left_position,
                     left_arm["velocity"][control_idx],
                     "left",
                 )
@@ -1529,8 +1546,11 @@ class Base_Task(gym.Env):
                 )  # TODO
 
             if (right_arm is not None and control_idx < right_arm["position"].shape[0]):  # control right arm
+                right_position = right_arm["position"][control_idx]
+                if right_offset is not None:
+                    right_position = right_position + right_offset[: len(right_position)]
                 self.robot.set_arm_joints(
-                    right_arm["position"][control_idx],
+                    right_position,
                     right_arm["velocity"][control_idx],
                     "right",
                 )
@@ -1543,6 +1563,10 @@ class Base_Task(gym.Env):
                 )  # TODO
 
             self.scene.step()
+            self.episode_control_step += 1
+            # M4 contact/displacement tracking, when a tracker has been attached.
+            if self._curve_tracker is not None:
+                self._curve_tracker.step()
 
             if self.render_freq and control_idx % self.render_freq == 0:
                 self._update_render()
