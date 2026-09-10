@@ -5,6 +5,34 @@ import subprocess
 import pickle
 import pdb
 
+# Rocky 9 (and RHEL generally) ships ffmpeg built without libx264 -- the encoder list
+# has libopenh264, h264_nvenc and the hardware ones, but not libx264. Hardcoding
+# libx264 makes ffmpeg exit immediately and the write to its stdin fails with
+# BrokenPipeError, which reads like a pipe bug rather than a missing codec.
+_H264_ENCODERS = ("libx264", "libopenh264", "h264_nvenc")
+_ENCODER = None
+
+
+def _pick_h264_encoder():
+    """First H.264 encoder this ffmpeg build actually has."""
+    global _ENCODER
+    if _ENCODER is not None:
+        return _ENCODER
+    try:
+        listing = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+    except Exception:
+        listing = ""
+    for name in _H264_ENCODERS:
+        if f" {name} " in listing:
+            _ENCODER = name
+            break
+    else:
+        _ENCODER = _H264_ENCODERS[0]
+    return _ENCODER
+
 
 def images_to_video(imgs: np.ndarray, out_path: str, fps: float = 30.0, is_rgb: bool = True) -> None:
     if (not isinstance(imgs, np.ndarray) or imgs.ndim != 4 or imgs.shape[3] not in (3, 4)):
@@ -34,9 +62,7 @@ def images_to_video(imgs: np.ndarray, out_path: str, fps: float = 30.0, is_rgb: 
             "-pix_fmt",
             "yuv420p",
             "-vcodec",
-            "libx264",
-            "-crf",
-            "23",
+            _pick_h264_encoder(),
             f"{out_path}",
         ],
         stdin=subprocess.PIPE,
