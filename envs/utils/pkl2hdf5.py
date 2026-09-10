@@ -159,6 +159,37 @@ def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
             state.create_dataset(target_name, data=values[:-1])
             action.create_dataset(target_name, data=values[1:])
 
+        # ---- object state -------------------------------------------------------
+        # Pose of every task actor and joint positions of every task articulation.
+        # Sliced [:-1] so it lines up with the state group; action is the next frame,
+        # and object poses are state, not something the policy commands.
+        object_state = data.get("object_state") or {}
+        actor_poses = object_state.get("actor_poses") or []
+        if len(actor_poses) >= 2:
+            obj = f.create_group("object_state")
+            poses = np.asarray(actor_poses, dtype=np.float64)[:-1]   # (T-1, N, 7)
+            obj.create_dataset("actor_poses", data=poses)
+
+            # Names are constant across frames; store the first frame's list once.
+            names = object_state.get("actor_names") or []
+            if names:
+                obj.create_dataset(
+                    "actor_names",
+                    data=np.array([str(n) for n in names[0]], dtype=object),
+                    dtype=string_dtype,
+                )
+
+            art_names = object_state.get("articulation_names") or []
+            art_qpos = object_state.get("articulation_qpos") or []
+            if art_names and art_names[0]:
+                arts = obj.create_group("articulations")
+                for slot, art_name in enumerate(art_names[0]):
+                    per_frame = [np.asarray(frame[slot], dtype=np.float64)
+                                 for frame in art_qpos]
+                    arts.create_dataset(
+                        str(art_name), data=np.asarray(per_frame)[:-1]
+                    )
+
         vision = f.create_group("vision")
         observations = data["observation"]
         for source_name, target_name in CAMERA_MAP.items():
@@ -214,7 +245,11 @@ def pkl_files_to_hdf5_and_video(
         pkl_file = load_pkl_file(pkl_file_path)
         append_data_to_structure(data_list, pkl_file)
 
-    images_to_video(np.array(data_list["observation"]["head_camera"]["rgb"]), out_path=video_path)
+    # Physics-only collection never records a camera, so there is nothing to make a
+    # video from. This used to KeyError on head_camera.
+    head = data_list.get("observation", {}).get("head_camera", {})
+    if video_path is not None and head.get("rgb"):
+        images_to_video(np.array(head["rgb"]), out_path=video_path)
     return create_xpolicylab_hdf5(data_list, hdf5_path, instructions, frequency)
 
 
