@@ -57,6 +57,29 @@ def build_episode_instructions(args, episode_info, episode_idx):
     return episode_descriptions
 
 
+def record_episode_label(args, episode_idx, seed, success):
+    """Append one episode's outcome to episode_labels.json under the save path.
+
+    Written incrementally rather than at the end so an interrupted run -- the normal
+    case on shared lab machines -- still leaves usable labels behind.
+    """
+    path = os.path.join(args["save_path"], "episode_labels.json")
+    labels = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as file:
+            try:
+                labels = json.load(file)
+            except json.JSONDecodeError:
+                labels = {}
+    labels[f"episode_{episode_idx:07d}"] = {
+        "episode_index": episode_idx,
+        "seed": int(seed),
+        "success": bool(success),
+    }
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(labels, file, ensure_ascii=False, indent=2)
+
+
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
     try:
@@ -230,6 +253,12 @@ def run(TASK_ENV, args):
     if args["collect_data"]:
         print("\033[93m" + "[Start Data Collection]" + "\033[0m")
 
+        # When set, a replay that ends in failure is kept and labelled instead of
+        # aborting the run. Off by default so M3's success set stays strict.
+        keep_failures = bool(args.get("keep_failures", False))
+        if keep_failures:
+            print("\033[93m" + "[Keeping failed episodes, labels recorded]" + "\033[0m")
+
         args["need_plan"] = False
         args["render_freq"] = 0
         args["save_data"] = True
@@ -269,6 +298,11 @@ def run(TASK_ENV, args):
             info = TASK_ENV.play_once()
             info_db[f"episode_{episode_idx}"] = info
 
+            # Read the outcome while the scene is still live. Upstream asserted on it
+            # after close_env(), which happens to work but reads scene state that has
+            # already been torn down.
+            episode_success = bool(TASK_ENV.check_success())
+
             with open(info_file_path, "w", encoding="utf-8") as file:
                 json.dump(info_db, file, ensure_ascii=False, indent=4)
 
@@ -278,7 +312,16 @@ def run(TASK_ENV, args):
                 instructions=episode_descriptions["seen"],
             )
             TASK_ENV.remove_data_cache()
-            assert TASK_ENV.check_success(), "Collect Error"
+
+            if keep_failures:
+                # M4/M5 want the failures too: a curve applied to a seed that succeeds
+                # without it is exactly what turns one success into a family of
+                # outcomes, and an episode is only useless if nothing moved.
+                record_episode_label(
+                    args, episode_idx, seed_list[episode_idx], episode_success
+                )
+            else:
+                assert episode_success, "Collect Error"
 
 
 if __name__ == "__main__":

@@ -197,6 +197,70 @@ class Base_Task(gym.Env):
     def check_success(self):
         pass
 
+    # Data types that need the renderer. If none of these is on, the whole camera
+    # and ray-tracing path can be skipped.
+    IMAGE_DATA_TYPES = (
+        "rgb",
+        "third_view",
+        "depth",
+        "pointcloud",
+        "mesh_segmentation",
+        "actor_segmentation",
+        "observer",
+    )
+
+    # Actors that are part of the room rather than the task.
+    SCENE_ACTORS = ("table", "wall", "ground")
+
+    def image_data_requested(self):
+        """True when any requested data type needs a rendered image."""
+        data_type = self.data_type or {}
+        return any(data_type.get(name, False) for name in self.IMAGE_DATA_TYPES)
+
+    def get_object_state(self):
+        """Pose of every task actor, and joint positions of every task articulation.
+
+        Poses are the actor frame as the asset defines it, not the centroid; the
+        offset between the two is fixed per instance and belongs to the scene.
+
+        Order follows the scene's actor order, which is creation order in the task's
+        load_actors(), so it is stable across episodes of one task. It is not
+        comparable across tasks, which is why each task exports its own dataset.
+        """
+        robot_names = set()
+        for entity in (
+            getattr(self.robot, "left_entity", None),
+            getattr(self.robot, "right_entity", None),
+        ):
+            if entity is not None:
+                robot_names.add(entity.get_name())
+
+        actor_names, actor_poses = [], []
+        for entity in self.scene.get_all_actors():
+            name = entity.get_name()
+            if name == "" or name in self.SCENE_ACTORS:
+                continue
+            pose = entity.get_pose()
+            actor_names.append(name)
+            actor_poses.append(np.concatenate([np.asarray(pose.p), np.asarray(pose.q)]))
+
+        art_names, art_qpos = [], []
+        for articulation in self.scene.get_all_articulations():
+            name = articulation.get_name()
+            if name in robot_names:
+                continue
+            art_names.append(name)
+            art_qpos.append(np.asarray(articulation.get_qpos(), dtype=np.float64))
+
+        return {
+            "actor_names": actor_names,
+            "actor_poses": np.asarray(actor_poses, dtype=np.float64).reshape(
+                len(actor_poses), 7
+            ),
+            "articulation_names": art_names,
+            "articulation_qpos": art_qpos,
+        }
+
     def setup_scene(self, **kwargs):
         """
         Set the scene
@@ -211,10 +275,14 @@ class Base_Task(gym.Env):
         # give renderer to sapien sim
         self.engine.set_renderer(self.renderer)
 
-        sapien.render.set_camera_shader_dir("rt")
-        sapien.render.set_ray_tracing_samples_per_pixel(32)
-        sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        # Ray tracing at 32 samples/pixel is set at engine creation and makes every
+        # subsequent render call expensive. Physics-only collection never reads a
+        # camera, so only pay for it when some image data type is actually on.
+        if self.image_data_requested():
+            sapien.render.set_camera_shader_dir("rt")
+            sapien.render.set_ray_tracing_samples_per_pixel(32)
+            sapien.render.set_ray_tracing_path_depth(8)
+            sapien.render.set_ray_tracing_denoiser("oidn")
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()
@@ -435,14 +503,20 @@ class Base_Task(gym.Env):
     # =========================================================== Basic APIs ===========================================================
 
     def get_obs(self):
-        self._update_render()
-        self.cameras.update_picture()
+        # Rendering used to run on every observation regardless of data_type. It is
+        # the dominant cost of a physics-only episode, so it is now conditional.
+        if self.image_data_requested():
+            self._update_render()
+            self.cameras.update_picture()
         pkl_dic = {
             "observation": {},
             "pointcloud": [],
             "joint_action": {},
             "endpose": {},
         }
+
+        # Full object state: what the released RoboTwin data does not carry.
+        pkl_dic["object_state"] = self.get_object_state()
 
         pkl_dic["observation"] = self.cameras.get_config()
         # rgb
