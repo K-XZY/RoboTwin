@@ -611,6 +611,9 @@ class Base_Task(gym.Env):
         traj_data = {
             "left_joint_path": deepcopy(self.left_joint_path),
             "right_joint_path": deepcopy(self.right_joint_path),
+            # How many control steps the unperturbed episode took. M4/M5 need it to
+            # place a trailing window, and it is only known once the episode has run.
+            "base_control_steps": int(self.episode_control_step),
         }
         save_pkl(file_path, traj_data)
 

@@ -57,6 +57,46 @@ def build_episode_instructions(args, episode_info, episode_idx):
     return episode_descriptions
 
 
+SIM_HZ = 250.0  # RoboTwin steps the scene at a 1/250 s timestep
+
+
+def curve_window_schedule(num_steps, step_seconds):
+    """Trailing windows of step_seconds, 2*step_seconds, ... closed by the whole episode.
+
+    Generated against the episode's own length. Episodes run roughly 5-38 s here, so a
+    fixed 5/10/15 s list would give a short task one window and a long one eight.
+    """
+    per = max(int(round(step_seconds * SIM_HZ)), 1)
+    windows, w = [], per
+    while w < num_steps:
+        windows.append(w)
+        w += per
+    windows.append(num_steps)
+    return sorted(set(windows))
+
+
+def build_curve(args, episode_idx, seed, base_steps):
+    """DualArmCurve for one episode, or None when the curve is off."""
+    cfg = args.get("curve") or {}
+    if not cfg.get("enabled", False) or base_steps < 2:
+        return None, None
+    from envs.utils.exploration_curve import DualArmCurve
+
+    windows = curve_window_schedule(base_steps, float(cfg.get("window_seconds", 5.0)))
+    # Cycle through the schedule across episodes so one task's dataset covers the
+    # whole family of windows rather than repeating one of them.
+    window = windows[episode_idx % len(windows)]
+    curve = DualArmCurve(
+        left_dim=int(cfg.get("left_dim", 7)),
+        right_dim=int(cfg.get("right_dim", 7)),
+        num_steps=base_steps,
+        window_steps=window,
+        amplitude=float(cfg.get("amplitude", 0.10)),
+        seed=seed,
+    )
+    return curve, curve.summary()
+
+
 def record_episode_label(args, episode_idx, seed, success):
     """Append one episode's outcome to episode_labels.json under the save path.
 
@@ -75,6 +115,7 @@ def record_episode_label(args, episode_idx, seed, success):
         "episode_index": episode_idx,
         "seed": int(seed),
         "success": bool(success),
+        "curve": args.get("_curve_summary"),
     }
     with open(path, "w", encoding="utf-8") as file:
         json.dump(labels, file, ensure_ascii=False, indent=2)
@@ -285,6 +326,20 @@ def run(TASK_ENV, args):
             args["left_joint_path"] = traj_data["left_joint_path"]
             args["right_joint_path"] = traj_data["right_joint_path"]
             TASK_ENV.set_path_lst(args)
+
+            # M4/M5: perturb the joint commands over a trailing window. The window is
+            # placed against the length the unperturbed episode actually took, which
+            # phase one recorded.
+            curve, curve_summary = build_curve(
+                args, episode_idx, seed_list[episode_idx],
+                int(traj_data.get("base_control_steps", 0)),
+            )
+            TASK_ENV.exploration_curve = curve
+            args["_curve_summary"] = curve_summary
+            if curve is not None:
+                print(f"  curve: window {curve_summary['window_steps']} steps "
+                      f"({curve_summary['window_steps'] / SIM_HZ:.1f}s) of "
+                      f"{curve_summary['num_steps']}, amplitude {curve_summary['amplitude']}")
 
             info_file_path = os.path.join(args["save_path"], "scene_info.json")
 
