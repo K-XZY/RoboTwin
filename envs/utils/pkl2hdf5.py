@@ -163,8 +163,14 @@ def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
             series = command.get(source_name)
             if series is None or len(series) < 2:
                 continue
-            if any(v is None for v in series):
+            # The arm carries no command during gripper-only segments, so the leading
+            # frames of an episode can be None until the arm is first commanded.
+            # Dropping the whole series on that basis lost every arm command; backfill
+            # from the first real value instead, and only give up if there is none.
+            first = next((v for v in series if v is not None), None)
+            if first is None:
                 continue
+            series = [first if v is None else v for v in series]
             action.create_dataset(target_name, data=_ensure_2d(series)[:-1])
 
         endpose = data.get("endpose", {})
