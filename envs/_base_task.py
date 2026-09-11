@@ -964,27 +964,58 @@ class Base_Task(gym.Env):
         right_n_step = right_result["position"].shape[0] if right_success else 0
 
         while now_left_id < left_n_step or now_right_id < right_n_step:
+            # The curve, the control-step counter and the tracker belong here as much as
+            # in take_dense_action. This is the other loop that drives the arms -- the one
+            # simultaneous two-arm motion runs through -- and it had none of the three.
+            # A task that moves both arms together was therefore never perturbed at all
+            # (ten byte-identical "variants" per parent), its object motion was invisible
+            # to the tracker, so contact appeared to happen on step 1, and the window was
+            # placed against a clock that had not been running.
+            left_offset, right_offset = None, None
+            if self.exploration_curve is not None:
+                left_offset, right_offset = self.exploration_curve.offset(
+                    self.episode_control_step
+                )
+            if self.last_joint_command is None:
+                self.last_joint_command = {
+                    "left_arm": None, "left_gripper": None,
+                    "right_arm": None, "right_gripper": None,
+                }
+
             # set the joint positions and velocities for move group joints only.
             # The others are not the responsibility of the planner
             if (left_success and now_left_id < left_n_step
                     and (not right_success or now_left_id / left_n_step <= now_right_id / right_n_step)):
+                left_position = left_result["position"][now_left_id]
+                self._held_arm_target["left"] = np.asarray(left_position, dtype=np.float64)
+                if left_offset is not None:
+                    left_position = left_position + left_offset[: len(left_position)]
                 self.robot.set_arm_joints(
-                    left_result["position"][now_left_id],
+                    left_position,
                     left_result["velocity"][now_left_id],
                     "left",
                 )
+                self.last_joint_command["left_arm"] = np.asarray(left_position, dtype=np.float64)
                 now_left_id += 1
 
             if (right_success and now_right_id < right_n_step
                     and (not left_success or now_right_id / right_n_step <= now_left_id / left_n_step)):
+                right_position = right_result["position"][now_right_id]
+                self._held_arm_target["right"] = np.asarray(right_position, dtype=np.float64)
+                if right_offset is not None:
+                    right_position = right_position + right_offset[: len(right_position)]
                 self.robot.set_arm_joints(
-                    right_result["position"][now_right_id],
+                    right_position,
                     right_result["velocity"][now_right_id],
                     "right",
                 )
+                self.last_joint_command["right_arm"] = np.asarray(right_position, dtype=np.float64)
                 now_right_id += 1
 
             self.scene.step()
+            self.episode_control_step += 1
+            if self._curve_tracker is not None:
+                self._curve_tracker.step()
             if self.render_freq and i % self.render_freq == 0:
                 self._update_render()
                 self.viewer.render()
