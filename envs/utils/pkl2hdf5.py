@@ -160,7 +160,7 @@ def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
             action.create_dataset(target_name, data=values[1:])
 
         # ---- object state -------------------------------------------------------
-        # Pose of every task actor and joint positions of every task articulation.
+        # Pose of every free object in the scene: seven numbers each.
         # Sliced [:-1] so it lines up with the state group; action is the next frame,
         # and object poses are state, not something the policy commands.
         object_state = data.get("object_state") or {}
@@ -179,8 +179,6 @@ def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
                     dtype=string_dtype,
                 )
 
-            art_names = object_state.get("articulation_names") or []
-            art_qpos = object_state.get("articulation_qpos") or []
         vision = f.create_group("vision")
         observations = data["observation"]
         for source_name, target_name in CAMERA_MAP.items():
