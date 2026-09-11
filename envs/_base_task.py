@@ -66,6 +66,9 @@ class Base_Task(gym.Env):
         self.episode_control_step = 0
         # Set by the M4/M5 driver to a DualArmCurve; None means replay unperturbed.
         self.exploration_curve = kwags.get("exploration_curve", None)
+        # Last unperturbed arm target, so a curve can keep perturbing through a segment
+        # that commands only the gripper.
+        self._held_arm_target = {"left": None, "right": None}
         # Set by the M4/M5 driver to a ContactTracker; stepped once per control step.
         self._curve_tracker = None
         # The joint command actually sent this control step. The generator otherwise
@@ -1546,7 +1549,9 @@ class Base_Task(gym.Env):
                 }
 
             if (left_arm is not None and control_idx < left_arm["position"].shape[0]):  # control left arm
-                left_position = left_arm["position"][control_idx]
+                base_position = left_arm["position"][control_idx]
+                self._held_arm_target["left"] = np.asarray(base_position, dtype=np.float64)
+                left_position = base_position
                 if left_offset is not None:
                     left_position = left_position + left_offset[: len(left_position)]
                 self.robot.set_arm_joints(
@@ -1554,6 +1559,18 @@ class Base_Task(gym.Env):
                     left_arm["velocity"][control_idx],
                     "left",
                 )
+                self.last_joint_command["left_arm"] = np.asarray(left_position, dtype=np.float64)
+            elif left_offset is not None and self._held_arm_target["left"] is not None:
+                # A segment that commands only the gripper still holds the arm, at the
+                # last target it was given, so the curve has to hold it there too. Without
+                # this a window landing inside a long gripper segment perturbs nothing --
+                # and effective contact is often exactly there, which is how two tasks came
+                # to produce ten bit-identical copies of their parent. The offset is added
+                # to the last *unperturbed* target, never to an already-perturbed one, so
+                # it cannot accumulate across the window.
+                held = self._held_arm_target["left"]
+                left_position = held + left_offset[: len(held)]
+                self.robot.set_arm_joints(left_position, np.zeros_like(left_position), "left")
                 self.last_joint_command["left_arm"] = np.asarray(left_position, dtype=np.float64)
 
             if left_gripper is not None and control_idx < left_gripper["num_step"]:
@@ -1567,7 +1584,9 @@ class Base_Task(gym.Env):
                 )
 
             if (right_arm is not None and control_idx < right_arm["position"].shape[0]):  # control right arm
-                right_position = right_arm["position"][control_idx]
+                base_position = right_arm["position"][control_idx]
+                self._held_arm_target["right"] = np.asarray(base_position, dtype=np.float64)
+                right_position = base_position
                 if right_offset is not None:
                     right_position = right_position + right_offset[: len(right_position)]
                 self.robot.set_arm_joints(
@@ -1575,6 +1594,11 @@ class Base_Task(gym.Env):
                     right_arm["velocity"][control_idx],
                     "right",
                 )
+                self.last_joint_command["right_arm"] = np.asarray(right_position, dtype=np.float64)
+            elif right_offset is not None and self._held_arm_target["right"] is not None:
+                held = self._held_arm_target["right"]
+                right_position = held + right_offset[: len(held)]
+                self.robot.set_arm_joints(right_position, np.zeros_like(right_position), "right")
                 self.last_joint_command["right_arm"] = np.asarray(right_position, dtype=np.float64)
 
             if right_gripper is not None and control_idx < right_gripper["num_step"]:
