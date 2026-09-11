@@ -226,7 +226,11 @@ class Base_Task(gym.Env):
         return any(data_type.get(name, False) for name in self.IMAGE_DATA_TYPES)
 
     def get_object_state(self):
-        """Pose of every task actor, and joint positions of every task articulation.
+        """Pose of every object in the scene, rigid or articulated.
+
+        Every entry is seven numbers: position and quaternion. An articulated object
+        contributes one entry per link, named "<object>/<link>", so the scene is a
+        uniform variable-length set of poses rather than poses mixed with joint angles.
 
         Poses are the actor frame as the asset defines it, not the centroid; the
         offset between the two is fixed per instance and belongs to the scene.
@@ -252,6 +256,12 @@ class Base_Task(gym.Env):
             actor_names.append(name)
             actor_poses.append(np.concatenate([np.asarray(pose.p), np.asarray(pose.q)]))
 
+        # Articulated objects are recorded as the pose of every link, not as joint
+        # angles. An object in this state space is seven numbers -- position and
+        # quaternion -- and an angle is not one of them; putting a scalar into a slot
+        # that elsewhere holds a pose breaks the uniformity that lets the scene be a
+        # variable-length set of objects. A microwave door is a link, and a link has a
+        # pose. Joint angles are kept alongside as a convenience, not as state.
         art_names, art_qpos = [], []
         for articulation in self.scene.get_all_articulations():
             name = articulation.get_name()
@@ -259,6 +269,12 @@ class Base_Task(gym.Env):
                 continue
             art_names.append(name)
             art_qpos.append(np.asarray(articulation.get_qpos(), dtype=np.float64))
+            for link in articulation.get_links():
+                pose = link.get_pose()
+                actor_names.append(f"{name}/{link.get_name()}")
+                actor_poses.append(
+                    np.concatenate([np.asarray(pose.p), np.asarray(pose.q)])
+                )
 
         return {
             "actor_names": actor_names,

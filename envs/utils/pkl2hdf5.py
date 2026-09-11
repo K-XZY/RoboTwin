@@ -181,8 +181,10 @@ def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
 
             art_names = object_state.get("articulation_names") or []
             art_qpos = object_state.get("articulation_qpos") or []
+            # Link poses already sit in actor_poses; qpos is kept only as a
+            # convenience for anything that wants the angle directly.
             if art_names and art_names[0]:
-                arts = obj.create_group("articulations")
+                arts = obj.create_group("articulation_qpos")
                 for slot, art_name in enumerate(art_names[0]):
                     per_frame = [np.asarray(frame[slot], dtype=np.float64)
                                  for frame in art_qpos]
