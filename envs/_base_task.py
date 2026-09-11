@@ -68,6 +68,11 @@ class Base_Task(gym.Env):
         self.exploration_curve = kwags.get("exploration_curve", None)
         # Set by the M4/M5 driver to a ContactTracker; stepped once per control step.
         self._curve_tracker = None
+        # The joint command actually sent this control step. The generator otherwise
+        # writes the next observed qpos as the action; those differ by the controller's
+        # tracking error, and M4 perturbs the command, so a set labelled with achieved
+        # state would understate the very perturbation it exists to capture.
+        self.last_joint_command = None
         self.task_name = kwags.get("task_name")
         self.save_dir = kwags.get("save_path", "data")
         self.ep_num = kwags.get("now_ep_num", 0)
@@ -521,6 +526,13 @@ class Base_Task(gym.Env):
 
         # Full object state: what the released RoboTwin data does not carry.
         pkl_dic["object_state"] = self.get_object_state()
+
+        # The command that was sent, when one has been issued this episode.
+        if self.last_joint_command is not None:
+            pkl_dic["joint_command"] = {
+                k: (np.asarray(v, dtype=np.float64) if v is not None else None)
+                for k, v in self.last_joint_command.items()
+            }
 
         pkl_dic["observation"] = self.cameras.get_config()
         # rgb
@@ -1527,6 +1539,12 @@ class Base_Task(gym.Env):
                     self.episode_control_step
                 )
 
+            if self.last_joint_command is None:
+                self.last_joint_command = {
+                    "left_arm": None, "left_gripper": None,
+                    "right_arm": None, "right_gripper": None,
+                }
+
             if (left_arm is not None and control_idx < left_arm["position"].shape[0]):  # control left arm
                 left_position = left_arm["position"][control_idx]
                 if left_offset is not None:
@@ -1536,6 +1554,7 @@ class Base_Task(gym.Env):
                     left_arm["velocity"][control_idx],
                     "left",
                 )
+                self.last_joint_command["left_arm"] = np.asarray(left_position, dtype=np.float64)
 
             if left_gripper is not None and control_idx < left_gripper["num_step"]:
                 self.robot.set_gripper(
@@ -1543,6 +1562,9 @@ class Base_Task(gym.Env):
                     "left",
                     left_gripper["per_step"],
                 )  # TODO
+                self.last_joint_command["left_gripper"] = float(
+                    np.asarray(left_gripper["result"][control_idx]).reshape(-1)[0]
+                )
 
             if (right_arm is not None and control_idx < right_arm["position"].shape[0]):  # control right arm
                 right_position = right_arm["position"][control_idx]
@@ -1553,6 +1575,7 @@ class Base_Task(gym.Env):
                     right_arm["velocity"][control_idx],
                     "right",
                 )
+                self.last_joint_command["right_arm"] = np.asarray(right_position, dtype=np.float64)
 
             if right_gripper is not None and control_idx < right_gripper["num_step"]:
                 self.robot.set_gripper(
@@ -1560,6 +1583,9 @@ class Base_Task(gym.Env):
                     "right",
                     right_gripper["per_step"],
                 )  # TODO
+                self.last_joint_command["right_gripper"] = float(
+                    np.asarray(right_gripper["result"][control_idx]).reshape(-1)[0]
+                )
 
             self.scene.step()
             self.episode_control_step += 1

@@ -148,6 +148,25 @@ def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
             state.create_dataset(target_name, data=values[:-1])
             action.create_dataset(target_name, data=values[1:])
 
+        # ---- commanded action -------------------------------------------------
+        # The action the plan says was sent, as opposed to the next observed state.
+        # Written under its own names so already-collected data stays readable and a
+        # loader can tell which it is looking at.
+        command = data.get("joint_command") or {}
+        cmd_fields = [
+            ("left_arm", "left_arm_joint_commands"),
+            ("left_gripper", "left_ee_joint_commands"),
+            ("right_arm", "right_arm_joint_commands"),
+            ("right_gripper", "right_ee_joint_commands"),
+        ]
+        for source_name, target_name in cmd_fields:
+            series = command.get(source_name)
+            if series is None or len(series) < 2:
+                continue
+            if any(v is None for v in series):
+                continue
+            action.create_dataset(target_name, data=_ensure_2d(series)[:-1])
+
         endpose = data.get("endpose", {})
         for source_name, target_name in [
             ("left_endpose", "left_ee_poses"),
