@@ -234,7 +234,20 @@ def run(TASK_ENV, args):
                     epid = max(seed_list) + 1
             print(f"Exist seed file, Start from: {epid} / {suc_num}")
 
+        # A hard cap on seed attempts. Phase one is `while suc_num < episode_num` with
+        # no bound, so an environment that fails to initialise -- a CuRobo allocation
+        # refused on a full GPU leaves a half-built Robot, and then every seed raises
+        # AttributeError -- spins forever burning the card. One run reached seed 40891
+        # on a task that scores 10/10 before it was noticed. The cap turns a silent
+        # runaway into a task that fails and gets requeued.
+        max_attempts = int(args.get("max_seed_attempts", 0)) or max(
+            200, 40 * int(args["episode_num"])
+        )
         while suc_num < args["episode_num"]:
+            if epid >= max_attempts:
+                print(f"\033[91m[Aborting: {epid} seed attempts, {suc_num} successes; "
+                      f"cap is {max_attempts}]\033[0m")
+                raise SystemExit(3)
             try:
                 TASK_ENV.setup_demo(now_ep_num=suc_num, seed=epid, **args)
                 TASK_ENV.play_once()
