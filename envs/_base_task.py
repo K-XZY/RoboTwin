@@ -617,6 +617,19 @@ class Base_Task(gym.Env):
         save_pkl(self.folder_path["cache"] + f"{self.FRAME_IDX}.pkl", pkl_dic)  # use cache
         self.FRAME_IDX += 1
 
+    def start_episode_clock(self):
+        """Zero the control-step counter at the point the episode proper begins.
+
+        setup_demo leaves the counter well past zero -- it drives the arms to their home
+        pose through the same take_dense_action, which costs 1500 steps on adjust_bottle
+        and 300 on move_can_pot, a different constant for every task. The curve's window
+        is placed against contact measured from the first step of play_once, so unless
+        the two clocks agree the window sits that constant away from where it was aimed:
+        on adjust_bottle it fell entirely before the episode began and the curve did
+        nothing at all. Called by the driver between setup and play_once.
+        """
+        self.episode_control_step = 0
+
     def save_traj_data(self, idx):
         file_path = os.path.join(self.save_dir, "_traj_data", f"episode{idx}.pkl")
         traj_data = {
@@ -1560,7 +1573,8 @@ class Base_Task(gym.Env):
                     "left",
                 )
                 self.last_joint_command["left_arm"] = np.asarray(left_position, dtype=np.float64)
-            elif left_offset is not None and self._held_arm_target["left"] is not None:
+            elif (left_offset is not None and self._held_arm_target["left"] is not None
+                  and np.any(left_offset)):
                 # A segment that commands only the gripper still holds the arm, at the
                 # last target it was given, so the curve has to hold it there too. Without
                 # this a window landing inside a long gripper segment perturbs nothing --
@@ -1595,7 +1609,8 @@ class Base_Task(gym.Env):
                     "right",
                 )
                 self.last_joint_command["right_arm"] = np.asarray(right_position, dtype=np.float64)
-            elif right_offset is not None and self._held_arm_target["right"] is not None:
+            elif (right_offset is not None and self._held_arm_target["right"] is not None
+                  and np.any(right_offset)):
                 held = self._held_arm_target["right"]
                 right_position = held + right_offset[: len(held)]
                 self.robot.set_arm_joints(right_position, np.zeros_like(right_position), "right")
