@@ -33,13 +33,21 @@ class JointCurve:
         seed: seed for the mode amplitudes.
     """
 
-    def __init__(self, n_joints, num_steps, window_steps, amplitude, n_modes=4, seed=None):
+    def __init__(self, n_joints, num_steps, window_steps, amplitude, n_modes=4, seed=None,
+                 start_step=None):
         self.n_joints = int(n_joints)
         self.num_steps = int(num_steps)
         self.window_steps = int(min(max(window_steps, 0), num_steps))
         self.amplitude = float(amplitude)
         self.n_modes = int(n_modes)
-        self.start_step = self.num_steps - self.window_steps
+        # Trailing window by default; start_step places it anywhere, which is what the
+        # contact-centred scheme needs. Clamped rather than shifted: shifting would
+        # slide the window off the contact it was placed to straddle.
+        if start_step is None:
+            self.start_step = self.num_steps - self.window_steps
+        else:
+            self.start_step = max(0, min(int(start_step), max(self.num_steps - 1, 0)))
+            self.window_steps = min(self.window_steps, self.num_steps - self.start_step)
 
         rng = np.random.default_rng(seed)
         if self.window_steps <= 1 or self.amplitude == 0.0 or self.n_joints == 0:
@@ -95,13 +103,16 @@ class DualArmCurve:
     """
 
     def __init__(self, left_dim, right_dim, num_steps, window_steps, amplitude,
-                 n_modes=4, seed=None):
+                 n_modes=4, seed=None, start_step=None):
         left_seed = None if seed is None else int(seed) * 2
         right_seed = None if seed is None else int(seed) * 2 + 1
-        self.left = JointCurve(left_dim, num_steps, window_steps, amplitude, n_modes, left_seed)
-        self.right = JointCurve(right_dim, num_steps, window_steps, amplitude, n_modes, right_seed)
+        self.left = JointCurve(left_dim, num_steps, window_steps, amplitude, n_modes,
+                               left_seed, start_step)
+        self.right = JointCurve(right_dim, num_steps, window_steps, amplitude, n_modes,
+                                right_seed, start_step)
         self.num_steps = int(num_steps)
         self.window_steps = self.left.window_steps
+        self.start_step = self.left.start_step
         self.amplitude = float(amplitude)
         self.seed = seed
 
